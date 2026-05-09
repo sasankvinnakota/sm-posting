@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  social-poster:
+    build: .
+    container_name: social_automation
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - .:/app
