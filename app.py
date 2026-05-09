@@ -5,8 +5,10 @@ import base64
 import requests
 import os
 import json
+import threading
 from datetime import datetime
 from pytz import timezone
+from flask import Flask
 
 from config import Config
 from airtable_client import AirtableClient
@@ -16,6 +18,19 @@ from creator import ContentCreator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+# --- Health Check Server (required for Render free Web Service) ---
+health_app = Flask(__name__)
+
+@health_app.route("/")
+def health():
+    return "Social Media Scheduler is running!", 200
+
+def run_health_server():
+    port = int(os.getenv("PORT", 10000))
+    logger.info(f"Starting health-check server on port {port}...")
+    health_app.run(host="0.0.0.0", port=port)
+# ------------------------------------------------------------------
 
 def get_target_platforms():
     """
@@ -183,4 +198,8 @@ def main():
         time.sleep(1)
 
 if __name__ == "__main__":
+    # Start Flask health-check server in a background daemon thread
+    health_thread = threading.Thread(target=run_health_server, daemon=True)
+    health_thread.start()
+    # Run the scheduler (blocks forever)
     main()
