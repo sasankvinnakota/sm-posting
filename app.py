@@ -178,20 +178,38 @@ def process_pending_posts(target_account=None):
     airtable.mark_as_posted(record_id)
     logger.info(f"Processed {target_account} for record {record_id}. Status set to DONE.")
 
+def ist_to_utc(time_str):
+    """
+    Convert a time string in IST (HH:MM) to UTC (HH:MM).
+    Render servers run in UTC, but users enter times in IST (UTC+5:30).
+    """
+    from datetime import date, time as dt_time
+    import pytz
+    ist = pytz.timezone("Asia/Kolkata")
+    utc = pytz.utc
+    hour, minute = map(int, time_str.split(":"))
+    # Combine with today's date and localize to IST
+    ist_dt = ist.localize(datetime.combine(date.today(), dt_time(hour, minute)))
+    # Convert to UTC
+    utc_dt = ist_dt.astimezone(utc)
+    return utc_dt.strftime("%H:%M")
+
 def main():
     logger.info("Starting Social Media Automation Scheduler...")
+    logger.info("NOTE: Posting times are entered in IST and auto-converted to UTC for scheduling.")
     
     active_profiles = [acc for acc, url in Config.MAKE_WEBHOOKS.items() if url and url != "URL_HERE"]
     
     for account_name in active_profiles:
-        time_str = Config.POSTING_TIMES.get(account_name)
-        if not time_str:
+        time_str_ist = Config.POSTING_TIMES.get(account_name)
+        if not time_str_ist:
             logger.warning(f"No posting time found for {account_name}. Skipping scheduling.")
             continue
-            
-        logger.info(f"Scheduling {account_name} for {time_str} daily.")
+
+        time_str_utc = ist_to_utc(time_str_ist)
+        logger.info(f"Scheduling {account_name} at {time_str_ist} IST ({time_str_utc} UTC) daily.")
         # Use a default argument in lambda to capture the current account_name correctly
-        schedule.every().day.at(time_str).do(lambda acc=account_name: process_pending_posts(target_account=acc))
+        schedule.every().day.at(time_str_utc).do(lambda acc=account_name: process_pending_posts(target_account=acc))
     
     while True:
         schedule.run_pending()
