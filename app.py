@@ -62,6 +62,7 @@ def save_progress(progress):
         json.dump(progress, f, indent=4)
 
 def update_record_progress(record_id, account_name):
+    """Mark account_name as done for this record_id. Returns the updated list."""
     progress = get_progress()
     if record_id not in progress:
         progress[record_id] = []
@@ -69,6 +70,30 @@ def update_record_progress(record_id, account_name):
         progress[record_id].append(account_name)
     save_progress(progress)
     return progress.get(record_id, [])
+
+def get_all_active_profiles():
+    """Return all profile names that have a valid webhook URL."""
+    return [acc for acc, url in Config.MAKE_WEBHOOKS.items() if url and url != "URL_HERE"]
+
+def all_profiles_done(record_id):
+    """
+    Returns True only when every active profile has been recorded in progress
+    for this record (either posted successfully or skipped due to no webhook).
+    """
+    active_profiles = set(get_all_active_profiles())
+    # Also include profiles that were intentionally skipped (no webhook)
+    skipped_profiles = set(
+        acc for acc, url in Config.MAKE_WEBHOOKS.items()
+        if not url or url == "URL_HERE"
+    )
+    # All profiles that should be counted as "done"
+    expected_profiles = active_profiles | skipped_profiles
+    done_profiles = set(get_progress().get(record_id, []))
+    remaining = expected_profiles - done_profiles
+    if remaining:
+        logger.info(f"Record {record_id} still waiting on profiles: {remaining}")
+        return False
+    return True
 
 def process_pending_posts(target_account=None):
     """
@@ -119,8 +144,12 @@ def process_pending_posts(target_account=None):
 
     webhook_url = Config.MAKE_WEBHOOKS.get(target_account)
     if not webhook_url or webhook_url == "URL_HERE":
-        logger.warning(f"No webhook configured for {target_account}. Marking as processed.")
+        logger.warning(f"No webhook configured for {target_account}. Skipping and marking as processed.")
         update_record_progress(record_id, target_account)
+        # Check if ALL profiles are now done after this skip
+        if all_profiles_done(record_id):
+            airtable.mark_as_posted(record_id)
+            logger.info(f"All profiles done for record {record_id}. Status set to DONE.")
         return
 
     logger.info(f"Processing Record {record_id} for {target_account}...")
@@ -171,12 +200,18 @@ def process_pending_posts(target_account=None):
         logger.exception(f"Error during posting to {target_account}: {e}")
         post_success = False
 
-    # Mark as Done immediately as per user request ("immediately to Done")
-    # This allows the user to see the record as finished while other profiles 
-    # continue to process it in the background using the local progress file.
-    update_record_progress(record_id, target_account)
-    airtable.mark_as_posted(record_id)
-    logger.info(f"Processed {target_account} for record {record_id}. Status set to DONE.")
+    # Only save progress if the post was successful
+    if post_success:
+        update_record_progress(record_id, target_account)
+        logger.info(f"Recorded successful post for {target_account} on record {record_id}.")
+        # Check if ALL profiles have now completed — only then mark Airtable as Done
+        if all_profiles_done(record_id):
+            airtable.mark_as_posted(record_id)
+            logger.info(f"✅ All profiles done for record {record_id}. Status set to DONE in Airtable.")
+        else:
+            logger.info(f"⏳ Record {record_id}: {target_account} done. Waiting for remaining profiles before marking Done.")
+    else:
+        logger.warning(f"❌ Post failed for {target_account} on record {record_id}. NOT marking as done. Will retry next schedule.")
 
 def ist_to_utc(time_str):
     """
